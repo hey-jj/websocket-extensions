@@ -29,8 +29,8 @@ use pledge::Pledge;
 /// An error flowing through the pipeline.
 ///
 /// The message is mutated in place as it passes a cell, gaining a `name: `
-/// prefix for the session that produced or relayed it. This matches the source
-/// library, which prepends the extension name at each hop.
+/// prefix for the session that produced or relayed it. Each cell prepends its
+/// extension name so a failing hop is identifiable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PipelineError {
     /// The error text. Cells prepend their extension name and `: `.
@@ -99,7 +99,7 @@ pub struct SessionRecord<M> {
 
 /// The ordered async pipeline over a set of sessions.
 pub struct Pipeline<M> {
-    cells: Vec<Rc<RefCell<Cell<M>>>>,
+    cells: Rc<[Rc<RefCell<Cell<M>>>]>,
     stopped_incoming: Rc<RefCell<bool>>,
     stopped_outgoing: Rc<RefCell<bool>>,
 }
@@ -107,7 +107,7 @@ pub struct Pipeline<M> {
 impl<M: 'static> Pipeline<M> {
     /// Build a pipeline from session records in pipeline order.
     pub fn new(sessions: Vec<SessionRecord<M>>) -> Self {
-        let cells = sessions
+        let cells: Rc<[Rc<RefCell<Cell<M>>>]> = sessions
             .into_iter()
             .map(|record| Rc::new(RefCell::new(Cell::new(record))))
             .collect();
@@ -192,7 +192,7 @@ impl<M: 'static> Pipeline<M> {
         message: M,
         callback: Callback<M>,
     ) {
-        for cell in &self.cells {
+        for cell in self.cells.iter() {
             cell.borrow_mut().pending(direction);
         }
 
@@ -202,6 +202,7 @@ impl<M: 'static> Pipeline<M> {
         };
 
         let ctx = Rc::new(LoopCtx {
+            // One refcount bump on the shared cell slice, no Vec allocation.
             cells: self.cells.clone(),
             direction,
             end,
@@ -215,7 +216,7 @@ impl<M: 'static> Pipeline<M> {
 
 /// The loop-invariant parts of one pipe traversal.
 struct LoopCtx<M> {
-    cells: Vec<Rc<RefCell<Cell<M>>>>,
+    cells: Rc<[Rc<RefCell<Cell<M>>>]>,
     direction: Direction,
     end: isize,
     step: isize,
