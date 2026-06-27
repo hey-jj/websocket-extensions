@@ -64,7 +64,7 @@ pub type Outcome<M> = Result<M, PipelineError>;
 pub type Callback<M> = Box<dyn FnOnce(Outcome<M>)>;
 
 /// Direction of message flow.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Direction {
     /// From the peer to the application. Traverses sessions back to front.
     Incoming,
