@@ -104,7 +104,9 @@ fn returns_the_serialized_response_from_the_session() {
 fn returns_serialized_responses_from_multiple_sessions() {
     let (mut ext, ..) = setup();
     assert_eq!(
-        ext.generate_response("deflate, reverse").unwrap().as_deref(),
+        ext.generate_response("deflate, reverse")
+            .unwrap()
+            .as_deref(),
         Some("deflate; mode=compress, reverse; utf8")
     );
 }
@@ -113,7 +115,9 @@ fn returns_serialized_responses_from_multiple_sessions() {
 fn returns_responses_in_registration_order() {
     let (mut ext, ..) = setup();
     assert_eq!(
-        ext.generate_response("reverse, deflate").unwrap().as_deref(),
+        ext.generate_response("reverse, deflate")
+            .unwrap()
+            .as_deref(),
         Some("deflate; mode=compress, reverse; utf8")
     );
 }

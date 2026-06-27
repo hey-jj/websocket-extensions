@@ -88,7 +88,10 @@ fn parses_a_quoted_param() {
 fn parses_multiple_params() {
     assert_parses(
         Some("a; b; c=1; d=\"hi\""),
-        &[("a", params(&[("b", flag()), ("c", num(1.0)), ("d", s("hi"))]))],
+        &[(
+            "a",
+            params(&[("b", flag()), ("c", num(1.0)), ("d", s("hi"))]),
+        )],
     );
 }
 
@@ -112,8 +115,7 @@ fn parses_duplicate_params() {
 
 #[test]
 fn parses_multiple_complex_offers() {
-    let offers =
-        parse_header(Some("a; b=1, c, b; d, c; e=\"hi, there\"; e, a; b")).unwrap();
+    let offers = parse_header(Some("a; b=1, c, b; d, c; e=\"hi, there\"; e, a; b")).unwrap();
     let got = offers.to_vec();
     assert_eq!(got.len(), 5);
 

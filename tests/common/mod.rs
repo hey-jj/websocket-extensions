@@ -9,8 +9,8 @@
 #![allow(dead_code)]
 
 use std::cell::RefCell;
-use std::collections::BinaryHeap;
 use std::cmp::Ordering;
+use std::collections::BinaryHeap;
 use std::rc::Rc;
 
 use websocket_extensions::parser::{Params, Slot, Value};
@@ -111,10 +111,7 @@ impl Ord for Timer {
     fn cmp(&self, other: &Self) -> Ordering {
         // Reverse so the BinaryHeap (a max-heap) yields the earliest due first,
         // then the lowest sequence number.
-        other
-            .due
-            .cmp(&self.due)
-            .then(other.seq.cmp(&self.seq))
+        other.due.cmp(&self.due).then(other.seq.cmp(&self.seq))
     }
 }
 
@@ -321,13 +318,11 @@ impl Extension<Message> for MockExt {
         }))
     }
 
-    fn create_server_session(
-        &self,
-        offers: &[&Params],
-    ) -> Option<Box<dyn ServerSession<Message>>> {
+    fn create_server_session(&self, offers: &[&Params]) -> Option<Box<dyn ServerSession<Message>>> {
         let mut b = self.behavior.borrow_mut();
         b.create_server_calls += 1;
-        b.server_offers.push(offers.iter().map(|p| (*p).clone()).collect());
+        b.server_offers
+            .push(offers.iter().map(|p| (*p).clone()).collect());
         if !b.server_session {
             return None;
         }

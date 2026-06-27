@@ -175,6 +175,10 @@ fn carries_a_leading_id_through_processing() {
     let message = got.borrow_mut().take().unwrap();
     assert_eq!(
         message.frames,
-        vec![Tag::Num(7), Tag::Str("deflate".into()), Tag::Str("reverse".into())]
+        vec![
+            Tag::Num(7),
+            Tag::Str("deflate".into()),
+            Tag::Str("reverse".into())
+        ]
     );
 }

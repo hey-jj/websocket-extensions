@@ -65,7 +65,10 @@ fn returns_the_serialized_offer_from_the_session() {
     let mut ext = Extensions::new();
     let deflate = deflate_handle();
     ext.add(deflate.extension()).unwrap();
-    assert_eq!(ext.generate_offer().as_deref(), Some("deflate; mode=compress"));
+    assert_eq!(
+        ext.generate_offer().as_deref(),
+        Some("deflate; mode=compress")
+    );
 }
 
 #[test]
@@ -82,7 +85,10 @@ fn returns_multiple_serialized_offers_from_the_session() {
     let mut ext = Extensions::new();
     let deflate = deflate_handle();
     // offer [ {mode: compress}, {} ]
-    deflate.set_offers(vec![one("mode", Value::Str("compress".into())), Params::new()]);
+    deflate.set_offers(vec![
+        one("mode", Value::Str("compress".into())),
+        Params::new(),
+    ]);
     ext.add(deflate.extension()).unwrap();
     assert_eq!(
         ext.generate_offer().as_deref(),
@@ -182,7 +188,10 @@ fn activates_one_session_with_a_string_param() {
     ext.activate("deflate; mode=compress").unwrap();
     let b = deflate.behavior();
     assert_eq!(b.activate_calls, 1);
-    assert_eq!(b.activate_args[0], one("mode", Value::Str("compress".into())));
+    assert_eq!(
+        b.activate_args[0],
+        one("mode", Value::Str("compress".into()))
+    );
 }
 
 #[test]
