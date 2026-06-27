@@ -1,5 +1,4 @@
-//! RSV bit validation. This behavior is public but not covered by the source
-//! test suite, so these cases are added from the specification.
+//! RSV bit validation for frame headers against the active session set.
 
 mod common;
 
@@ -113,4 +112,38 @@ fn server_side_reservations_gate_rsv_bits() {
 
     assert!(ext.valid_frame_rsv(&frame(2, true, false, false)));
     assert!(!ext.valid_frame_rsv(&frame(2, false, true, false)));
+}
+
+#[test]
+fn generate_offer_reflects_offered_extensions_in_the_active_set() {
+    // After generate_offer, valid_frame_rsv must already allow the RSV bits the
+    // offered extensions use, before activate runs.
+    let mut ext = Extensions::<Message>::new();
+    ext.add(deflate_handle().extension()).unwrap();
+    ext.generate_offer();
+
+    // deflate uses rsv1, so a message frame with rsv1 is valid.
+    assert!(ext.valid_frame_rsv(&frame(1, true, false, false)));
+    // No offered extension uses rsv2 or rsv3.
+    assert!(!ext.valid_frame_rsv(&frame(1, false, true, false)));
+    // A control frame still disallows every bit.
+    assert!(!ext.valid_frame_rsv(&frame(8, true, false, false)));
+}
+
+#[test]
+fn a_second_generate_offer_overwrites_the_active_set() {
+    // The first offer sets rsv1 via deflate. A second offer with only an rsv2
+    // extension must replace the active set, not accumulate it.
+    let mut ext = Extensions::<Message>::new();
+    ext.add(deflate_handle().extension()).unwrap();
+    ext.generate_offer();
+    assert!(ext.valid_frame_rsv(&frame(1, true, false, false)));
+
+    let mut ext = Extensions::<Message>::new();
+    ext.add(reverse_handle().extension()).unwrap();
+    ext.generate_offer();
+    ext.generate_offer();
+    // reverse uses rsv2, and the repeat offer must not leave rsv1 allowed.
+    assert!(ext.valid_frame_rsv(&frame(1, false, true, false)));
+    assert!(!ext.valid_frame_rsv(&frame(1, true, false, false)));
 }

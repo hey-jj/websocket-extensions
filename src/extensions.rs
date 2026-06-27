@@ -20,7 +20,7 @@ pub const MESSAGE_OPCODES: [u8; 2] = [1, 2];
 /// A frame header, as far as RSV validation needs it.
 ///
 /// Only `opcode` and the three RSV bits are read.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Frame {
     /// The frame opcode. 1 and 2 are message frames.
     pub opcode: u8,
@@ -141,9 +141,7 @@ impl From<ParseError> for ExtensionError {
 /// owns the active pipeline once negotiation completes. One instance serves one
 /// side of one socket.
 pub struct Extensions<M> {
-    rsv1: Option<String>,
-    rsv2: Option<String>,
-    rsv3: Option<String>,
+    rsv: RsvReservations,
     in_order: Vec<Box<dyn Extension<M>>>,
     names: Vec<String>,
     /// Active sessions with their RSV bits, read by `valid_frame_rsv`.
@@ -153,19 +151,52 @@ pub struct Extensions<M> {
     client_index: Vec<ClientRecord<M>>,
 }
 
+/// Which RSV bits an extension uses, as `[rsv1, rsv2, rsv3]`.
+#[derive(Clone, Copy)]
+struct RsvUse([bool; 3]);
+
+/// The holder of each RSV bit, by bit index.
+///
+/// Slot `i` names the first extension to claim bit `i + 1`, or is empty.
+#[derive(Default)]
+struct RsvReservations {
+    bits: [Option<String>; 3],
+}
+
+impl RsvReservations {
+    /// First taken bit this use also wants, as `(bit number, holder name)`.
+    ///
+    /// Bits are checked in order 1, 2, 3.
+    fn conflict(&self, uses: RsvUse) -> Option<(u8, String)> {
+        for i in 0..3 {
+            if uses.0[i] {
+                if let Some(name) = &self.bits[i] {
+                    return Some((i as u8 + 1, name.clone()));
+                }
+            }
+        }
+        None
+    }
+
+    /// Claim each bit this use wants that is still free, naming `name` as holder.
+    fn reserve(&mut self, name: &str, uses: RsvUse) {
+        for i in 0..3 {
+            if uses.0[i] && self.bits[i].is_none() {
+                self.bits[i] = Some(name.to_string());
+            }
+        }
+    }
+}
+
 /// Bookkeeping for an active session, used by `valid_frame_rsv`.
 struct ActiveExt {
-    rsv1: bool,
-    rsv2: bool,
-    rsv3: bool,
+    uses: RsvUse,
 }
 
 /// A client session built during `generate_offer`, kept for `activate`.
 struct ClientRecord<M> {
     name: String,
-    rsv1: bool,
-    rsv2: bool,
-    rsv3: bool,
+    uses: RsvUse,
     session: Option<Box<dyn ClientSession<M>>>,
 }
 
@@ -179,9 +210,7 @@ impl<M: 'static> Extensions<M> {
     /// Create an empty container.
     pub fn new() -> Self {
         Extensions {
-            rsv1: None,
-            rsv2: None,
-            rsv3: None,
+            rsv: RsvReservations::default(),
             in_order: Vec::new(),
             names: Vec::new(),
             sessions: Vec::new(),
@@ -192,8 +221,12 @@ impl<M: 'static> Extensions<M> {
 
     /// Register an extension plugin.
     ///
-    /// Registration order sets pipeline order. A duplicate name returns
-    /// [`ExtensionError::DuplicateName`].
+    /// Registration order sets pipeline order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExtensionError::DuplicateName`] when an extension with the same
+    /// name is already registered.
     pub fn add(&mut self, ext: Box<dyn Extension<M>>) -> Result<(), ExtensionError> {
         let name = ext.name().to_string();
         if self.names.iter().any(|n| n == &name) {
@@ -217,6 +250,7 @@ impl<M: 'static> Extensions<M> {
     pub fn generate_offer(&mut self) -> Option<String> {
         let mut offer: Vec<String> = Vec::new();
         let mut index: Vec<ClientRecord<M>> = Vec::new();
+        let mut active: Vec<ActiveExt> = Vec::new();
 
         for ext in &self.in_order {
             let mut session = match ext.create_client_session() {
@@ -224,21 +258,25 @@ impl<M: 'static> Extensions<M> {
                 None => continue,
             };
 
+            let uses = RsvUse([ext.rsv1(), ext.rsv2(), ext.rsv3()]);
             let offers = session.generate_offer().unwrap_or_default();
             for params in &offers {
                 offer.push(parser::serialize_params(ext.name(), params));
             }
 
+            active.push(ActiveExt { uses });
             index.push(ClientRecord {
                 name: ext.name().to_string(),
-                rsv1: ext.rsv1(),
-                rsv2: ext.rsv2(),
-                rsv3: ext.rsv3(),
+                uses,
                 session: Some(session),
             });
         }
 
         self.client_index = index;
+        // Reflect the offered extensions in the active session set so
+        // valid_frame_rsv allows their RSV bits in the window before activate.
+        // A later generate_offer overwrites this, as activate does.
+        self.sessions = active;
 
         if offer.is_empty() {
             None
@@ -253,73 +291,51 @@ impl<M: 'static> Extensions<M> {
     /// up the offered session, checks for an RSV conflict, and activates the
     /// session with the server's parameters. Builds the pipeline from the
     /// activated sessions in server-header order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExtensionError::Parse`] when the response header is malformed,
+    /// [`ExtensionError::UnknownExtension`] when the server names an extension
+    /// that was not offered, [`ExtensionError::RsvConflict`] when two responses
+    /// claim the same RSV bit, and [`ExtensionError::UnacceptableParams`] when a
+    /// session rejects the server's parameters.
     pub fn activate(&mut self, header: &str) -> Result<(), ExtensionError> {
         let responses = parser::parse_header(Some(header))?;
 
         let mut records: Vec<SessionRecord<M>> = Vec::new();
         let mut active: Vec<ActiveExt> = Vec::new();
-        let mut conflict: Option<ExtensionError> = None;
-        let mut order: Vec<(String, bool, bool, bool)> = Vec::new();
 
-        responses.each_offer(|name, params| {
-            if conflict.is_some() {
-                return;
-            }
-            let record = self.client_index.iter_mut().find(|r| r.name == name);
-            let record = match record {
-                Some(record) => record,
-                None => {
-                    conflict = Some(ExtensionError::UnknownExtension(name.to_string()));
-                    return;
-                }
-            };
+        for offer in &responses {
+            let name = offer.name.as_str();
+            let params = &offer.params;
 
-            if let Some((bit, first)) = reserved(
-                &self.rsv1,
-                &self.rsv2,
-                &self.rsv3,
-                record.rsv1,
-                record.rsv2,
-                record.rsv3,
-            ) {
-                conflict = Some(ExtensionError::RsvConflict(bit, first, record.name.clone()));
-                return;
+            let record = self
+                .client_index
+                .iter_mut()
+                .find(|r| r.name == name)
+                .ok_or_else(|| ExtensionError::UnknownExtension(name.to_string()))?;
+
+            if let Some((bit, first)) = self.rsv.conflict(record.uses) {
+                return Err(ExtensionError::RsvConflict(bit, first, record.name.clone()));
             }
 
             let mut session = record.session.take().expect("session offered once");
             if !session.activate(params) {
-                conflict = Some(ExtensionError::UnacceptableParams(
+                // Put the session back so a retry sees it.
+                record.session = Some(session);
+                return Err(ExtensionError::UnacceptableParams(
                     parser::serialize_params(name, params),
                 ));
-                // Put the session back so a retry sees it; matches single-use
-                // semantics loosely but keeps the error path clean.
-                record.session = Some(session);
-                return;
             }
 
-            reserve(
-                &mut self.rsv1,
-                &mut self.rsv2,
-                &mut self.rsv3,
-                &record.name,
-                record.rsv1,
-                record.rsv2,
-                record.rsv3,
-            );
-            order.push((record.name.clone(), record.rsv1, record.rsv2, record.rsv3));
-            active.push(ActiveExt {
-                rsv1: record.rsv1,
-                rsv2: record.rsv2,
-                rsv3: record.rsv3,
-            });
+            let name = record.name.clone();
+            let uses = record.uses;
+            self.rsv.reserve(&name, uses);
+            active.push(ActiveExt { uses });
             records.push(SessionRecord {
-                name: record.name.clone(),
+                name,
                 session: session as Box<dyn Session<M>>,
             });
-        });
-
-        if let Some(err) = conflict {
-            return Err(err);
         }
 
         self.sessions = active;
@@ -335,6 +351,11 @@ impl<M: 'static> Extensions<M> {
     /// or `None` when no extension responds.
     ///
     /// The response is in registration order, not client-offer order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExtensionError::Parse`] when the client offer header is
+    /// malformed.
     pub fn generate_response(&mut self, header: &str) -> Result<Option<String>, ExtensionError> {
         let offers = parser::parse_header(Some(header))?;
 
@@ -347,16 +368,8 @@ impl<M: 'static> Extensions<M> {
             if offer.is_empty() {
                 continue;
             }
-            if reserved(
-                &self.rsv1,
-                &self.rsv2,
-                &self.rsv3,
-                ext.rsv1(),
-                ext.rsv2(),
-                ext.rsv3(),
-            )
-            .is_some()
-            {
+            let uses = RsvUse([ext.rsv1(), ext.rsv2(), ext.rsv3()]);
+            if self.rsv.conflict(uses).is_some() {
                 continue;
             }
 
@@ -365,23 +378,11 @@ impl<M: 'static> Extensions<M> {
                 None => continue,
             };
 
-            reserve(
-                &mut self.rsv1,
-                &mut self.rsv2,
-                &mut self.rsv3,
-                ext.name(),
-                ext.rsv1(),
-                ext.rsv2(),
-                ext.rsv3(),
-            );
+            self.rsv.reserve(ext.name(), uses);
 
             let params = session.generate_response();
             response.push(parser::serialize_params(ext.name(), &params));
-            active.push(ActiveExt {
-                rsv1: ext.rsv1(),
-                rsv2: ext.rsv2(),
-                rsv3: ext.rsv3(),
-            });
+            active.push(ActiveExt { uses });
             records.push(SessionRecord {
                 name: ext.name().to_string(),
                 session: session as Box<dyn Session<M>>,
@@ -404,21 +405,23 @@ impl<M: 'static> Extensions<M> {
     /// session reserves it. For any other opcode no bit is allowed. A frame is
     /// valid when every bit it sets is allowed.
     pub fn valid_frame_rsv(&self, frame: &Frame) -> bool {
-        let mut allowed = (false, false, false);
+        let mut allowed = [false, false, false];
         if MESSAGE_OPCODES.contains(&frame.opcode) {
             for ext in &self.sessions {
-                allowed.0 |= ext.rsv1;
-                allowed.1 |= ext.rsv2;
-                allowed.2 |= ext.rsv3;
+                allowed[0] |= ext.uses.0[0];
+                allowed[1] |= ext.uses.0[1];
+                allowed[2] |= ext.uses.0[2];
             }
         }
-        (allowed.0 || !frame.rsv1) && (allowed.1 || !frame.rsv2) && (allowed.2 || !frame.rsv3)
+        (allowed[0] || !frame.rsv1) && (allowed[1] || !frame.rsv2) && (allowed[2] || !frame.rsv3)
     }
 
     /// Run a message toward the application through the pipeline.
     ///
-    /// Panics if called before negotiation builds a pipeline, matching the
-    /// source, which assumes a pipeline exists.
+    /// # Panics
+    ///
+    /// Panics if called before `activate` or `generate_response` builds the
+    /// pipeline.
     pub fn process_incoming_message<F>(&self, message: M, callback: F)
     where
         F: FnOnce(Outcome<M>) + 'static,
@@ -431,7 +434,10 @@ impl<M: 'static> Extensions<M> {
 
     /// Run a message toward the peer through the pipeline.
     ///
-    /// Panics if called before negotiation builds a pipeline.
+    /// # Panics
+    ///
+    /// Panics if called before `activate` or `generate_response` builds the
+    /// pipeline.
     pub fn process_outgoing_message<F>(&self, message: M, callback: F)
     where
         F: FnOnce(Outcome<M>) + 'static,
@@ -455,54 +461,4 @@ impl<M: 'static> Extensions<M> {
             Some(pipeline) => pipeline.close(Some(callback)),
         }
     }
-}
-
-/// Record the first extension to claim each RSV bit it uses.
-fn reserve(
-    rsv1: &mut Option<String>,
-    rsv2: &mut Option<String>,
-    rsv3: &mut Option<String>,
-    name: &str,
-    uses1: bool,
-    uses2: bool,
-    uses3: bool,
-) {
-    if rsv1.is_none() && uses1 {
-        *rsv1 = Some(name.to_string());
-    }
-    if rsv2.is_none() && uses2 {
-        *rsv2 = Some(name.to_string());
-    }
-    if rsv3.is_none() && uses3 {
-        *rsv3 = Some(name.to_string());
-    }
-}
-
-/// Return the first taken RSV bit this extension also wants.
-///
-/// Yields `(bit, reserving extension name)`, checked in order 1, 2, 3.
-fn reserved(
-    rsv1: &Option<String>,
-    rsv2: &Option<String>,
-    rsv3: &Option<String>,
-    uses1: bool,
-    uses2: bool,
-    uses3: bool,
-) -> Option<(u8, String)> {
-    if uses1 {
-        if let Some(name) = rsv1 {
-            return Some((1, name.clone()));
-        }
-    }
-    if uses2 {
-        if let Some(name) = rsv2 {
-            return Some((2, name.clone()));
-        }
-    }
-    if uses3 {
-        if let Some(name) = rsv3 {
-            return Some((3, name.clone()));
-        }
-    }
-    None
 }
