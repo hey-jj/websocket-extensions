@@ -6,5 +6,7 @@ description = "WebSocket Sec-WebSocket-Extensions header parsing and extension n
 license = "MIT"
 repository = "https://github.com/hey-jj/websocket-extensions"
 readme = "README.md"
+keywords = ["websocket", "rfc6455", "extensions", "permessage", "protocol"]
+categories = ["network-programming", "web-programming::websocket", "parser-implementations"]
 
 [dependencies]
