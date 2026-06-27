@@ -46,7 +46,7 @@ driver chooses its own frame representation.
 use websocket_extensions::parser::{parse_header, serialize_params};
 
 let offers = parse_header(Some("permessage-deflate; client_max_window_bits")).unwrap();
-assert_eq!(offers.to_vec()[0].name, "permessage-deflate");
+assert_eq!(offers[0].name, "permessage-deflate");
 ```
 
 `parse_header` takes `Option<&str>`. `None` and an empty string both yield an

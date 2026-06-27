@@ -37,8 +37,7 @@
 //! use websocket_extensions::parser::{parse_header, serialize_params};
 //!
 //! let offers = parse_header(Some("permessage-deflate; client_max_window_bits")).unwrap();
-//! let list = offers.to_vec();
-//! assert_eq!(list[0].name, "permessage-deflate");
+//! assert_eq!(offers[0].name, "permessage-deflate");
 //! ```
 
 #![forbid(unsafe_code)]

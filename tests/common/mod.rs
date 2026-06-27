@@ -1,10 +1,9 @@
 //! Test harness: mock extensions, mock sessions, and a virtual clock.
 //!
-//! The mocks mirror the stubbed objects in the source test suite. Each mock
-//! session shares a `Behavior` cell with the test, which configures canned
-//! offers, responses, and per-direction processors, and reads back call counts
-//! and recorded arguments. A `Clock` provides deterministic virtual time so the
-//! async ordering and close-drain scenarios replay without real delays.
+//! Each mock session shares a `Behavior` cell with the test, which configures
+//! canned offers, responses, and per-direction processors, and reads back call
+//! counts and recorded arguments. A `Clock` provides deterministic virtual time
+//! so the async ordering and close-drain scenarios replay without real delays.
 
 #![allow(dead_code)]
 
@@ -52,7 +51,7 @@ impl Message {
         }
     }
 
-    /// Append a string tag and return self, matching `message.concat(tag)`.
+    /// Append a string tag and return self.
     pub fn with(mut self, tag: &str) -> Self {
         self.frames.push(Tag::Str(tag.to_string()));
         self

@@ -14,8 +14,7 @@ fn does_not_throw_on_valid_extensions() {
 
 #[test]
 fn rejects_a_duplicate_name() {
-    // Not exercised in the source suite. The source throws a TypeError when a
-    // name is already registered.
+    // Registering a name twice returns DuplicateName.
     let mut ext = Extensions::<Message>::new();
     let a = MockHandle::new("deflate", true, false, false);
     let b = MockHandle::new("deflate", false, true, false);
@@ -29,7 +28,7 @@ fn rejects_a_duplicate_name() {
     );
 }
 
-// The source rejects a non-string name and non-boolean RSV fields with a
-// TypeError. Here the Extension trait types name as a string and the RSV bits
-// as booleans, so those cases cannot be constructed. The type system enforces
-// them at compile time.
+// The Extension trait types the name as a string and the RSV bits as booleans,
+// so a non-string name or a non-boolean RSV bit cannot be constructed. The type
+// system enforces those constraints at compile time, so no runtime check exists
+// or is needed.
