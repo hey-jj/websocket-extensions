@@ -33,7 +33,7 @@ use std::fmt;
 pub enum Value {
     /// A valueless flag. Always `true` when produced by parsing.
     Bool(bool),
-    /// A numeric value, stored as an IEEE double to match the source grammar.
+    /// A numeric value, stored as an IEEE double.
     Number(f64),
     /// A string value.
     Str(String),
@@ -154,11 +154,9 @@ impl Offers {
         });
     }
 
-    /// Run `f` for each offer in wire order.
-    pub fn each_offer<F: FnMut(&str, &Params)>(&self, mut f: F) {
-        for offer in &self.in_order {
-            f(&offer.name, &offer.params);
-        }
+    /// Iterate every offer in wire order.
+    pub fn iter(&self) -> std::slice::Iter<'_, Offer> {
+        self.in_order.iter()
     }
 
     /// Return every parameter set parsed under `name`, in order.
@@ -172,15 +170,32 @@ impl Offers {
             .collect()
     }
 
-    /// Return every offer in wire order.
-    pub fn to_vec(&self) -> &[Offer] {
+    /// View every offer in wire order as a slice.
+    pub fn as_slice(&self) -> &[Offer] {
         &self.in_order
+    }
+}
+
+impl std::ops::Deref for Offers {
+    type Target = [Offer];
+
+    fn deref(&self) -> &Self::Target {
+        &self.in_order
+    }
+}
+
+impl<'a> IntoIterator for &'a Offers {
+    type Item = &'a Offer;
+    type IntoIter = std::slice::Iter<'a, Offer>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.in_order.iter()
     }
 }
 
 /// A malformed `Sec-WebSocket-Extensions` header.
 ///
-/// Carries the offending header so the message matches the source library.
+/// Carries the offending header so the error message can quote it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseError {
     header: String,
@@ -319,8 +334,9 @@ impl<'a> Scanner<'a> {
     /// Read a quoted string. Assumes the opening quote is the next byte.
     ///
     /// The content allows an escape `\` plus any ASCII byte, or any byte that is
-    /// not a control char, `"`, or `\`. Backslashes are stripped while reading,
-    /// so `\"` yields `"` and `\a` yields `a`. Returns `None` on a malformed or
+    /// not a control char, `"`, or `\`. Every backslash is dropped from the
+    /// value, whatever follows it. So `\"` yields `"`, `\a` yields `a`, and the
+    /// two-byte sequence `\\` yields nothing. Returns `None` on a malformed or
     /// unterminated string.
     fn read_quoted(&mut self) -> Option<String> {
         if self.peek() != Some(b'"') {
@@ -333,15 +349,19 @@ impl<'a> Scanner<'a> {
                 None => return None, // unterminated
                 Some(b'"') => {
                     self.pos += 1;
-                    // Quoted content is unescaped above, but it may carry
-                    // non-ASCII bytes, so decode lossily-free via from_utf8.
+                    // The value may carry non-ASCII bytes, so decode via
+                    // from_utf8 and reject an invalid sequence.
                     return String::from_utf8(out).ok();
                 }
                 Some(b'\\') => {
+                    // An escape unit is the backslash plus the next byte, which
+                    // must be ASCII. Drop the backslash. Keep the escaped byte
+                    // unless it is itself a backslash, which is also dropped. So
+                    // `\"` yields `"`, `\a` yields `a`, and `\\` yields nothing.
                     self.pos += 1;
                     match self.peek() {
+                        Some(b'\\') => self.pos += 1,
                         Some(c) if c <= 0x7f => {
-                            // Strip the backslash, keep the escaped byte.
                             out.push(c);
                             self.pos += 1;
                         }
@@ -349,8 +369,9 @@ impl<'a> Scanner<'a> {
                     }
                 }
                 Some(c) => {
-                    // Reject control chars and lone backslash handled above.
-                    // Allowed: any byte except 0x00-0x08, 0x0a-0x1f, 0x7f, '"', '\'.
+                    // Reject control chars. Backslash and the closing quote are
+                    // handled above. Allowed: any byte except 0x00-0x08,
+                    // 0x0a-0x1f, 0x7f, '"', '\'.
                     let is_ctl = c <= 0x08 || (0x0a..=0x1f).contains(&c) || c == 0x7f;
                     if is_ctl {
                         return None;
@@ -365,9 +386,9 @@ impl<'a> Scanner<'a> {
 
 /// Validate the whole header against the anchored grammar.
 ///
-/// Mirrors the `EXT_LIST` regex: a comma-separated list of extensions, each an
-/// extension name followed by optional `; param` pairs, with optional spaces
-/// around separators. Returns false on any deviation.
+/// The header is a comma-separated list of extensions. Each extension is a name
+/// followed by optional `; param` pairs, with optional spaces around the
+/// separators. Returns false on any deviation.
 fn valid_header(header: &str) -> bool {
     let mut s = Scanner::new(header);
 
@@ -419,10 +440,14 @@ fn valid_header(header: &str) -> bool {
 
 /// Parse a `Sec-WebSocket-Extensions` header into [`Offers`].
 ///
-/// `None` and `Some("")` both yield an empty offer list. Any other malformed
-/// header returns [`ParseError`]. The parser preserves offer order, preserves
-/// parameter insertion order, coerces numeric values, and collapses repeated
-/// parameter keys into lists.
+/// `None` and `Some("")` both yield an empty offer list. The parser preserves
+/// offer order, preserves parameter insertion order, coerces numeric values,
+/// and collapses repeated parameter keys into lists.
+///
+/// # Errors
+///
+/// Returns [`ParseError`] when the header does not match the grammar. The error
+/// carries the offending header for the message.
 ///
 /// # Examples
 ///
@@ -430,10 +455,9 @@ fn valid_header(header: &str) -> bool {
 /// use websocket_extensions::parser::{parse_header, Slot, Value};
 ///
 /// let offers = parse_header(Some("a; b=1, c")).unwrap();
-/// let list = offers.to_vec();
-/// assert_eq!(list[0].name, "a");
-/// assert_eq!(list[0].params.get("b"), Some(&Slot::One(Value::Number(1.0))));
-/// assert_eq!(list[1].name, "c");
+/// assert_eq!(offers[0].name, "a");
+/// assert_eq!(offers[0].params.get("b"), Some(&Slot::One(Value::Number(1.0))));
+/// assert_eq!(offers[1].name, "c");
 /// ```
 pub fn parse_header(header: Option<&str>) -> Result<Offers, ParseError> {
     let header = match header {
@@ -507,7 +531,9 @@ pub fn parse_header(header: Option<&str>) -> Result<Offers, ParseError> {
 /// - A string with any non-token character is quoted, and inner `"` is escaped.
 /// - Any other string prints unquoted.
 ///
-/// Empty parameters yield just the name.
+/// The quoting decision is independent per value. A string is quoted whenever
+/// it holds a non-token character, so two values in one call that both need
+/// quoting both get quoted. Empty parameters yield just the name.
 ///
 /// # Examples
 ///
@@ -555,14 +581,15 @@ fn print_value(out: &mut Vec<String>, key: &str, value: &Value) {
             out.push(format!("{}={}", key, s));
         }
     }
-    // Value::Bool(false) never occurs and prints nothing, matching the source.
+    // Value::Bool(false) never occurs from parsing and prints nothing.
 }
 
-/// Format a number the way the source library prints a JS double.
+/// Format a numeric value for a header.
 ///
-/// Integers print without a decimal point. Other finite values use the shortest
-/// round-tripping form, which `f64`'s default formatting already provides.
-/// `NaN` and the infinities print as `NaN`, `Infinity`, and `-Infinity`.
+/// Integer-valued numbers print without a decimal point, including values past
+/// the `i64` range. Other finite values use the shortest round-tripping form,
+/// which `f64`'s default formatting provides. `NaN` and the infinities print as
+/// `NaN`, `Infinity`, and `-Infinity`.
 fn format_number(n: f64) -> String {
     if n.is_nan() {
         "NaN".to_string()
@@ -572,9 +599,11 @@ fn format_number(n: f64) -> String {
         } else {
             "-Infinity".to_string()
         }
-    } else if n == n.trunc() && n.abs() < 1e21 {
-        format!("{}", n as i64)
     } else {
+        // f64's default formatting prints an integer value with no decimal
+        // point and a fraction in its shortest form, so 1.0 prints as 1 and
+        // 1.5 prints as 1.5. No cast to a narrower integer type, which would
+        // saturate for large values.
         format!("{}", n)
     }
 }

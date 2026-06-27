@@ -27,7 +27,7 @@ fn flag() -> Value {
 /// Assert that parsing `input` yields the given (name, params) offers in order.
 fn assert_parses(input: Option<&str>, expected: &[(&str, Params)]) {
     let offers = parse_header(input).expect("expected a valid header");
-    let got = offers.to_vec();
+    let got = offers.as_slice();
     assert_eq!(got.len(), expected.len(), "offer count for {:?}", input);
     for (offer, (name, params)) in got.iter().zip(expected) {
         assert_eq!(&offer.name, name, "name for {:?}", input);
@@ -105,7 +105,7 @@ fn parses_duplicate_params() {
     assert_parses(Some("a; b; c=1; b=\"hi\""), &[("a", p)]);
     // Confirm b is a two-element list, c remains scalar.
     let offers = parse_header(Some("a; b; c=1; b=\"hi\"")).unwrap();
-    let offer = &offers.to_vec()[0];
+    let offer = &offers[0];
     assert_eq!(
         offer.params.get("b"),
         Some(&Slot::Many(vec![flag(), s("hi")]))
@@ -116,7 +116,7 @@ fn parses_duplicate_params() {
 #[test]
 fn parses_multiple_complex_offers() {
     let offers = parse_header(Some("a; b=1, c, b; d, c; e=\"hi, there\"; e, a; b")).unwrap();
-    let got = offers.to_vec();
+    let got = offers.as_slice();
     assert_eq!(got.len(), 5);
 
     assert_eq!(got[0].name, "a");
@@ -146,7 +146,7 @@ fn parses_an_extension_name_that_shadows_an_object_property() {
 #[test]
 fn parses_an_extension_param_that_shadows_an_object_property() {
     let offers = parse_header(Some("foo; hasOwnProperty; x")).unwrap();
-    let offer = &offers.to_vec()[0];
+    let offer = &offers[0];
     assert_eq!(offer.params.get("hasOwnProperty"), Some(&Slot::One(flag())));
 }
 
@@ -218,25 +218,25 @@ fn serializes_duplicate_params() {
 fn number_grammar_edge_cases() {
     // Leading zeros are not numbers.
     let offers = parse_header(Some("a; b=01; c=00")).unwrap();
-    let offer = &offers.to_vec()[0];
+    let offer = &offers[0];
     assert_eq!(offer.params.get("b"), Some(&Slot::One(s("01"))));
     assert_eq!(offer.params.get("c"), Some(&Slot::One(s("00"))));
 
     // Bare 0 and 0.5 are numbers.
     let offers = parse_header(Some("a; b=0; c=0.5")).unwrap();
-    let offer = &offers.to_vec()[0];
+    let offer = &offers[0];
     assert_eq!(offer.params.get("b"), Some(&Slot::One(num(0.0))));
     assert_eq!(offer.params.get("c"), Some(&Slot::One(num(0.5))));
 
     // Negative integers and fractions.
     let offers = parse_header(Some("a; b=-3; c=1.5")).unwrap();
-    let offer = &offers.to_vec()[0];
+    let offer = &offers[0];
     assert_eq!(offer.params.get("b"), Some(&Slot::One(num(-3.0))));
     assert_eq!(offer.params.get("c"), Some(&Slot::One(num(1.5))));
 
     // Exponents and a trailing dot are not numbers.
     let offers = parse_header(Some("a; b=1e5")).unwrap();
-    let offer = &offers.to_vec()[0];
+    let offer = &offers[0];
     assert_eq!(offer.params.get("b"), Some(&Slot::One(s("1e5"))));
 }
 
@@ -244,16 +244,24 @@ fn number_grammar_edge_cases() {
 fn quoted_numeric_value_is_coerced() {
     // A quoted numeric string is still coerced to a number.
     let offers = parse_header(Some("a; b=\"1\"")).unwrap();
-    let offer = &offers.to_vec()[0];
+    let offer = &offers[0];
     assert_eq!(offer.params.get("b"), Some(&Slot::One(num(1.0))));
 }
 
 #[test]
 fn quoted_value_strips_all_backslashes() {
-    // Every backslash is removed, regardless of what follows.
+    // Every backslash is removed, regardless of what follows, including a
+    // backslash that precedes another backslash.
     let offers = parse_header(Some("a; b=\"a\\b\\c\"")).unwrap();
-    let offer = &offers.to_vec()[0];
-    assert_eq!(offer.params.get("b"), Some(&Slot::One(s("abc"))));
+    assert_eq!(offers[0].params.get("b"), Some(&Slot::One(s("abc"))));
+
+    // Backslash before backslash: the pair collapses to nothing.
+    let offers = parse_header(Some("a; b=\"\\\\b\"")).unwrap();
+    assert_eq!(offers[0].params.get("b"), Some(&Slot::One(s("b"))));
+
+    // Two such pairs around content: x\\y\\z yields xyz.
+    let offers = parse_header(Some("a; b=\"x\\\\y\\\\z\"")).unwrap();
+    assert_eq!(offers[0].params.get("b"), Some(&Slot::One(s("xyz"))));
 }
 
 #[test]
@@ -275,7 +283,7 @@ fn number_serializes_without_decimal_point() {
 fn tab_is_allowed_unescaped_in_a_quoted_value() {
     // 0x09 sits outside the forbidden control ranges, so it passes through.
     let offers = parse_header(Some("a; b=\"x\ty\"")).unwrap();
-    let offer = &offers.to_vec()[0];
+    let offer = &offers[0];
     assert_eq!(offer.params.get("b"), Some(&Slot::One(s("x\ty"))));
 }
 
@@ -284,7 +292,7 @@ fn non_ascii_bytes_survive_in_a_quoted_value() {
     // The non-escaped class excludes control chars but admits any other code
     // point, so multi-byte UTF-8 passes through intact.
     let offers = parse_header(Some("a; b=\"café\"")).unwrap();
-    let offer = &offers.to_vec()[0];
+    let offer = &offers[0];
     assert_eq!(offer.params.get("b"), Some(&Slot::One(s("café"))));
 }
 
@@ -302,7 +310,7 @@ fn raw_control_char_in_a_quoted_value_is_rejected() {
 
 #[test]
 fn serializes_special_number_values() {
-    // JS prints these doubles as NaN, Infinity, -Infinity.
+    // NaN and the infinities print as NaN, Infinity, and -Infinity.
     assert_eq!(
         serialize_params("a", &params(&[("b", num(f64::NAN))])),
         "a; b=NaN"
@@ -319,7 +327,10 @@ fn serializes_special_number_values() {
 
 #[test]
 fn serializes_a_fractional_number() {
-    assert_eq!(serialize_params("a", &params(&[("b", num(1.5))])), "a; b=1.5");
+    assert_eq!(
+        serialize_params("a", &params(&[("b", num(1.5))])),
+        "a; b=1.5"
+    );
 }
 
 #[test]
@@ -331,7 +342,7 @@ fn serializes_a_value_with_an_inner_quote() {
     );
 }
 
-// Offers accessors: by_name and each_offer.
+// Offers accessors: by_name and iteration.
 
 #[test]
 fn by_name_groups_offers_and_returns_empty_for_unknown() {
@@ -345,9 +356,42 @@ fn by_name_groups_offers_and_returns_empty_for_unknown() {
 }
 
 #[test]
-fn each_offer_visits_every_offer_in_wire_order() {
+fn iter_visits_every_offer_in_wire_order() {
     let offers = parse_header(Some("a, b, a")).unwrap();
-    let mut seen = Vec::new();
-    offers.each_offer(|name, _params| seen.push(name.to_string()));
+    let seen: Vec<&str> = offers.iter().map(|o| o.name.as_str()).collect();
     assert_eq!(seen, vec!["a", "b", "a"]);
+}
+
+#[test]
+fn offers_iterate_by_reference_and_index_like_a_slice() {
+    let offers = parse_header(Some("a, b, a")).unwrap();
+    // IntoIterator for &Offers drives a plain for loop.
+    let mut seen = Vec::new();
+    for offer in &offers {
+        seen.push(offer.name.clone());
+    }
+    assert_eq!(seen, vec!["a", "b", "a"]);
+    // Deref to [Offer] gives slice indexing and len.
+    assert_eq!(offers.len(), 3);
+    assert_eq!(offers[1].name, "b");
+}
+
+#[test]
+fn serializes_a_large_integer_without_scientific_notation() {
+    // 1e19 sits past the i64 range. It still prints as a plain integer with no
+    // decimal point and no exponent.
+    assert_eq!(
+        serialize_params("a", &params(&[("b", num(1e19))])),
+        "a; b=10000000000000000000"
+    );
+}
+
+#[test]
+fn quotes_each_value_that_needs_quoting_independently() {
+    // Two values in one call both hold a space, so both are quoted. The quoting
+    // decision does not depend on earlier values in the same call.
+    let mut p = Params::new();
+    p.insert("b", s("a b"));
+    p.insert("c", s("x y"));
+    assert_eq!(serialize_params("a", &p), "a; b=\"a b\"; c=\"x y\"");
 }
