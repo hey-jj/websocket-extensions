@@ -86,6 +86,24 @@ fn incoming_does_not_call_sessions_after_an_error() {
     assert_eq!(deflate.behavior().incoming_calls, 0);
 }
 
+#[test]
+fn incoming_uses_the_servers_order_not_the_clients() {
+    // The server response reverses the client registration order. Incoming runs
+    // back to front over the server order, so deflate runs before reverse.
+    let (mut ext, ..) = setup();
+    ext.activate("reverse, deflate").unwrap();
+
+    let got: Rc<RefCell<Option<Outcome<Message>>>> = Rc::new(RefCell::new(None));
+    let sink = got.clone();
+    ext.process_incoming_message(Message::empty(), move |outcome| {
+        *sink.borrow_mut() = Some(outcome);
+    });
+
+    let outcome = got.borrow_mut().take().unwrap();
+    let message = outcome.expect("no error");
+    assert_eq!(message.frames, strs(&["deflate", "reverse"]));
+}
+
 // processOutgoingMessage
 
 #[test]

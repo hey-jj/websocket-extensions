@@ -4,7 +4,7 @@ mod common;
 
 use common::{flag, one, Message, MockHandle};
 use websocket_extensions::parser::{Params, Value};
-use websocket_extensions::Extensions;
+use websocket_extensions::{ExtensionError, Extensions};
 
 /// Set up the deflate mock with offer { mode: compress } and activate -> true.
 fn deflate_handle() -> MockHandle {
@@ -137,7 +137,12 @@ fn setup_activate() -> (Extensions<Message>, MockHandle, MockHandle, MockHandle)
 #[test]
 fn throws_if_given_unregistered_extensions() {
     let (mut ext, ..) = setup_activate();
-    assert!(ext.activate("xml").is_err());
+    let err = ext.activate("xml").unwrap_err();
+    assert_eq!(err, ExtensionError::UnknownExtension("xml".to_string()));
+    assert_eq!(
+        err.to_string(),
+        "Server sent an extension response for unknown extension \"xml\""
+    );
 }
 
 #[test]
@@ -155,7 +160,15 @@ fn does_not_throw_for_one_potentially_conflicting_extension() {
 #[test]
 fn throws_if_two_extensions_conflict_on_rsv_bits() {
     let (mut ext, ..) = setup_activate();
-    assert!(ext.activate("deflate, tar").is_err());
+    let err = ext.activate("deflate, tar").unwrap_err();
+    assert_eq!(
+        err,
+        ExtensionError::RsvConflict(1, "deflate".to_string(), "tar".to_string())
+    );
+    assert_eq!(
+        err.to_string(),
+        "Server sent two extension responses that use the RSV1 bit: \"deflate\" and \"tar\""
+    );
 }
 
 #[test]
@@ -214,5 +227,13 @@ fn does_not_activate_sessions_not_named_in_the_header() {
 fn throws_if_activate_does_not_return_true() {
     let (mut ext, deflate, ..) = setup_activate();
     deflate.behavior().activate_returns = false;
-    assert!(ext.activate("deflate").is_err());
+    let err = ext.activate("deflate; mode=compress").unwrap_err();
+    assert_eq!(
+        err,
+        ExtensionError::UnacceptableParams("deflate; mode=compress".to_string())
+    );
+    assert_eq!(
+        err.to_string(),
+        "Server sent unacceptable extension parameters: deflate; mode=compress"
+    );
 }

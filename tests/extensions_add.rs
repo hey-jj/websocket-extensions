@@ -20,9 +20,12 @@ fn rejects_a_duplicate_name() {
     let a = MockHandle::new("deflate", true, false, false);
     let b = MockHandle::new("deflate", false, true, false);
     assert!(ext.add(a.extension()).is_ok());
+    let err = ext.add(b.extension()).unwrap_err();
+    assert_eq!(err, ExtensionError::DuplicateName("deflate".to_string()));
+    // Pin the rendered message, which a driver may surface to a peer.
     assert_eq!(
-        ext.add(b.extension()),
-        Err(ExtensionError::DuplicateName("deflate".to_string()))
+        err.to_string(),
+        "An extension with name \"deflate\" is already registered"
     );
 }
 

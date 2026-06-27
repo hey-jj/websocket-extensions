@@ -268,3 +268,86 @@ fn number_serializes_without_decimal_point() {
         "a; b=1; c=-3"
     );
 }
+
+// Added: quoted-string grammar edge cases the token grammar admits.
+
+#[test]
+fn tab_is_allowed_unescaped_in_a_quoted_value() {
+    // 0x09 sits outside the forbidden control ranges, so it passes through.
+    let offers = parse_header(Some("a; b=\"x\ty\"")).unwrap();
+    let offer = &offers.to_vec()[0];
+    assert_eq!(offer.params.get("b"), Some(&Slot::One(s("x\ty"))));
+}
+
+#[test]
+fn non_ascii_bytes_survive_in_a_quoted_value() {
+    // The non-escaped class excludes control chars but admits any other code
+    // point, so multi-byte UTF-8 passes through intact.
+    let offers = parse_header(Some("a; b=\"café\"")).unwrap();
+    let offer = &offers.to_vec()[0];
+    assert_eq!(offer.params.get("b"), Some(&Slot::One(s("café"))));
+}
+
+#[test]
+fn empty_value_after_equals_is_rejected() {
+    // `a; b=` has no token or quoted value, so the whole header is invalid.
+    assert!(parse_header(Some("a; b=")).is_err());
+}
+
+#[test]
+fn raw_control_char_in_a_quoted_value_is_rejected() {
+    // 0x01 is a forbidden control char inside a quoted string.
+    assert!(parse_header(Some("a; b=\"\u{01}\"")).is_err());
+}
+
+#[test]
+fn serializes_special_number_values() {
+    // JS prints these doubles as NaN, Infinity, -Infinity.
+    assert_eq!(
+        serialize_params("a", &params(&[("b", num(f64::NAN))])),
+        "a; b=NaN"
+    );
+    assert_eq!(
+        serialize_params("a", &params(&[("b", num(f64::INFINITY))])),
+        "a; b=Infinity"
+    );
+    assert_eq!(
+        serialize_params("a", &params(&[("b", num(f64::NEG_INFINITY))])),
+        "a; b=-Infinity"
+    );
+}
+
+#[test]
+fn serializes_a_fractional_number() {
+    assert_eq!(serialize_params("a", &params(&[("b", num(1.5))])), "a; b=1.5");
+}
+
+#[test]
+fn serializes_a_value_with_an_inner_quote() {
+    // Only `"` is escaped inside the quoted form. A backslash is not escaped.
+    assert_eq!(
+        serialize_params("a", &params(&[("b", s("a\"b"))])),
+        "a; b=\"a\\\"b\""
+    );
+}
+
+// Offers accessors: by_name and each_offer.
+
+#[test]
+fn by_name_groups_offers_and_returns_empty_for_unknown() {
+    let offers = parse_header(Some("a; x=1, b, a; y=2")).unwrap();
+    let a_params = offers.by_name("a");
+    assert_eq!(a_params.len(), 2);
+    assert_eq!(a_params[0].get("x"), Some(&Slot::One(num(1.0))));
+    assert_eq!(a_params[1].get("y"), Some(&Slot::One(num(2.0))));
+    assert_eq!(offers.by_name("b").len(), 1);
+    assert!(offers.by_name("missing").is_empty());
+}
+
+#[test]
+fn each_offer_visits_every_offer_in_wire_order() {
+    let offers = parse_header(Some("a, b, a")).unwrap();
+    let mut seen = Vec::new();
+    offers.each_offer(|name, _params| seen.push(name.to_string()));
+    assert_eq!(seen, vec!["a", "b", "a"]);
+}

@@ -90,6 +90,18 @@ fn no_sessions_means_no_rsv_bits_allowed() {
 }
 
 #[test]
+fn fresh_container_disallows_every_rsv_bit() {
+    // No negotiation has run, so the active session set is empty. A message
+    // frame with any RSV bit set is invalid, while a bare frame is valid.
+    let ext = Extensions::<Message>::new();
+    assert!(!ext.valid_frame_rsv(&frame(1, true, false, false)));
+    assert!(!ext.valid_frame_rsv(&frame(2, false, true, false)));
+    assert!(!ext.valid_frame_rsv(&frame(1, false, false, true)));
+    assert!(ext.valid_frame_rsv(&frame(1, false, false, false)));
+    assert!(ext.valid_frame_rsv(&frame(8, false, false, false)));
+}
+
+#[test]
 fn server_side_reservations_gate_rsv_bits() {
     // Tie generate_response to valid_frame_rsv: an activated server session
     // reserves the bit it uses.
