@@ -103,7 +103,11 @@ impl std::fmt::Display for ExtensionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ExtensionError::DuplicateName(name) => {
-                write!(f, "An extension with name \"{}\" is already registered", name)
+                write!(
+                    f,
+                    "An extension with name \"{}\" is already registered",
+                    name
+                )
             }
             ExtensionError::UnknownExtension(name) => write!(
                 f,
@@ -131,11 +135,6 @@ impl From<ParseError> for ExtensionError {
     }
 }
 
-/// A registered extension and the index it occupies.
-struct Registered<M> {
-    ext: Box<dyn Extension<M>>,
-}
-
 /// The extension container.
 ///
 /// Holds registered plugins in registration order, tracks RSV reservations, and
@@ -145,12 +144,12 @@ pub struct Extensions<M> {
     rsv1: Option<String>,
     rsv2: Option<String>,
     rsv3: Option<String>,
-    in_order: Vec<Registered<M>>,
+    in_order: Vec<Box<dyn Extension<M>>>,
     names: Vec<String>,
-    /// Active sessions as (extension index, name, rsv bits) after negotiation.
+    /// Active sessions with their RSV bits, read by `valid_frame_rsv`.
     sessions: Vec<ActiveExt>,
     pipeline: Option<Pipeline<M>>,
-    /// Client offer index: name to client session, set by generate_offer.
+    /// Client sessions built by `generate_offer`, consumed by `activate`.
     client_index: Vec<ClientRecord<M>>,
 }
 
@@ -201,7 +200,7 @@ impl<M: 'static> Extensions<M> {
             return Err(ExtensionError::DuplicateName(name));
         }
         self.names.push(name);
-        self.in_order.push(Registered { ext });
+        self.in_order.push(ext);
         Ok(())
     }
 
@@ -219,8 +218,7 @@ impl<M: 'static> Extensions<M> {
         let mut offer: Vec<String> = Vec::new();
         let mut index: Vec<ClientRecord<M>> = Vec::new();
 
-        for registered in &self.in_order {
-            let ext = &registered.ext;
+        for ext in &self.in_order {
             let mut session = match ext.create_client_session() {
                 Some(session) => session,
                 None => continue,
@@ -276,9 +274,14 @@ impl<M: 'static> Extensions<M> {
                 }
             };
 
-            if let Some((bit, first)) =
-                reserved(&self.rsv1, &self.rsv2, &self.rsv3, record.rsv1, record.rsv2, record.rsv3)
-            {
+            if let Some((bit, first)) = reserved(
+                &self.rsv1,
+                &self.rsv2,
+                &self.rsv3,
+                record.rsv1,
+                record.rsv2,
+                record.rsv3,
+            ) {
                 conflict = Some(ExtensionError::RsvConflict(bit, first, record.name.clone()));
                 return;
             }
@@ -339,14 +342,18 @@ impl<M: 'static> Extensions<M> {
         let mut records: Vec<SessionRecord<M>> = Vec::new();
         let mut active: Vec<ActiveExt> = Vec::new();
 
-        for registered in &self.in_order {
-            let ext = &registered.ext;
+        for ext in &self.in_order {
             let offer = offers.by_name(ext.name());
             if offer.is_empty() {
                 continue;
             }
             if reserved(
-                &self.rsv1, &self.rsv2, &self.rsv3, ext.rsv1(), ext.rsv2(), ext.rsv3(),
+                &self.rsv1,
+                &self.rsv2,
+                &self.rsv3,
+                ext.rsv1(),
+                ext.rsv2(),
+                ext.rsv3(),
             )
             .is_some()
             {
@@ -451,7 +458,6 @@ impl<M: 'static> Extensions<M> {
 }
 
 /// Record the first extension to claim each RSV bit it uses.
-#[allow(clippy::too_many_arguments)]
 fn reserve(
     rsv1: &mut Option<String>,
     rsv2: &mut Option<String>,
@@ -475,7 +481,6 @@ fn reserve(
 /// Return the first taken RSV bit this extension also wants.
 ///
 /// Yields `(bit, reserving extension name)`, checked in order 1, 2, 3.
-#[allow(clippy::too_many_arguments)]
 fn reserved(
     rsv1: &Option<String>,
     rsv2: &Option<String>,

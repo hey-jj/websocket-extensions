@@ -202,9 +202,9 @@ impl std::error::Error for ParseError {}
 ///
 /// The set is `! # $ % & ' * + - . ^ _ ` | ~` plus ASCII digits and letters.
 fn is_token_char(c: char) -> bool {
-    matches!(c,
-        '!' | '#' | '$' | '%' | '&' | '\'' | '*' | '+' | '-' | '.' |
-        '^' | '_' | '`' | '|' | '~'
+    matches!(
+        c,
+        '!' | '#' | '$' | '%' | '&' | '\'' | '*' | '+' | '-' | '.' | '^' | '_' | '`' | '|' | '~'
     ) || c.is_ascii_digit()
         || c.is_ascii_alphabetic()
 }
@@ -469,7 +469,10 @@ pub fn parse_header(header: Option<&str>) -> Result<Offers, ParseError> {
             let value = if s.peek() == Some(b'=') {
                 s.pos += 1;
                 if s.peek() == Some(b'"') {
-                    coerce(s.read_quoted().expect("validated header has a quoted value"))
+                    coerce(
+                        s.read_quoted()
+                            .expect("validated header has a quoted value"),
+                    )
                 } else {
                     coerce(s.read_token().expect("validated header has a token value"))
                 }

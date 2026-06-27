@@ -130,7 +130,14 @@ impl<M: 'static> Pipeline<M> {
             return;
         }
         let n = self.cells.len() as isize;
-        self.run(Direction::Incoming, n - 1, -1, -1, message, Box::new(callback));
+        self.run(
+            Direction::Incoming,
+            n - 1,
+            -1,
+            -1,
+            message,
+            Box::new(callback),
+        );
     }
 
     /// Push a message toward the peer.
@@ -160,8 +167,11 @@ impl<M: 'static> Pipeline<M> {
         *self.stopped_incoming.borrow_mut() = true;
         *self.stopped_outgoing.borrow_mut() = true;
 
-        let closed: Vec<Rc<RefCell<Pledge>>> =
-            self.cells.iter().map(|cell| cell.borrow_mut().close()).collect();
+        let closed: Vec<Rc<RefCell<Pledge>>> = self
+            .cells
+            .iter()
+            .map(|cell| cell.borrow_mut().close())
+            .collect();
 
         if let Some(callback) = callback {
             Pledge::all(closed).borrow_mut().then(Box::new(callback));
@@ -186,14 +196,30 @@ impl<M: 'static> Pipeline<M> {
             cell.borrow_mut().pending(direction);
         }
 
-        let cells = self.cells.clone();
         let stopped = match direction {
             Direction::Incoming => self.stopped_incoming.clone(),
             Direction::Outgoing => self.stopped_outgoing.clone(),
         };
 
-        pipe(cells, direction, end, step, stopped, start, Ok(message), callback);
+        let ctx = Rc::new(LoopCtx {
+            cells: self.cells.clone(),
+            direction,
+            end,
+            step,
+            stopped,
+        });
+
+        pipe(ctx, start, Ok(message), callback);
     }
+}
+
+/// The loop-invariant parts of one pipe traversal.
+struct LoopCtx<M> {
+    cells: Vec<Rc<RefCell<Cell<M>>>>,
+    direction: Direction,
+    end: isize,
+    step: isize,
+    stopped: Rc<RefCell<bool>>,
 }
 
 /// One step of the recursive pipe.
@@ -201,36 +227,20 @@ impl<M: 'static> Pipeline<M> {
 /// When `index` reaches `end`, the result is delivered to `callback`. Otherwise
 /// the message runs through `cells[index]`, and the cell's completion advances
 /// to the next index, halting the direction on error.
-fn pipe<M: 'static>(
-    cells: Vec<Rc<RefCell<Cell<M>>>>,
-    direction: Direction,
-    end: isize,
-    step: isize,
-    stopped: Rc<RefCell<bool>>,
-    index: isize,
-    outcome: Outcome<M>,
-    callback: Callback<M>,
-) {
-    if index == end {
+fn pipe<M: 'static>(ctx: Rc<LoopCtx<M>>, index: isize, outcome: Outcome<M>, callback: Callback<M>) {
+    if index == ctx.end {
         callback(outcome);
         return;
     }
 
-    let cell = cells[index as usize].clone();
+    let cell = ctx.cells[index as usize].clone();
+    let direction = ctx.direction;
+    let step = ctx.step;
     let next = Box::new(move |result: Outcome<M>| {
         if result.is_err() {
-            *stopped.borrow_mut() = true;
+            *ctx.stopped.borrow_mut() = true;
         }
-        pipe(
-            cells,
-            direction,
-            end,
-            step,
-            stopped,
-            index + step,
-            result,
-            callback,
-        );
+        pipe(ctx, index + step, result, callback);
     });
 
     Cell::exec(&cell, direction, outcome, next);
