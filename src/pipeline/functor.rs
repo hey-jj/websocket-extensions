@@ -147,29 +147,38 @@ impl<M: 'static> Functor<M> {
 
         let state = self.state.clone();
         let called = Rc::new(RefCell::new(false));
-        let handler: Callback<M> = Box::new(move |result: Outcome<M>| {
-            // Once-guard: only the first completion has effect.
-            {
-                let mut flag = called.borrow_mut();
-                if *flag {
-                    return;
+        // True while the session method runs on this stack. A synchronous
+        // completion records its outcome but defers the flush, so the session
+        // borrow drops before any downstream callback runs.
+        let in_process = Rc::new(RefCell::new(true));
+        let handler: Callback<M> = {
+            let in_process = in_process.clone();
+            Box::new(move |result: Outcome<M>| {
+                // Once-guard: only the first completion has effect.
+                {
+                    let mut flag = called.borrow_mut();
+                    if *flag {
+                        return;
+                    }
+                    *flag = true;
                 }
-                *flag = true;
-            }
 
-            let is_err = result.is_err();
-            {
-                let mut state = state.borrow_mut();
-                if is_err {
-                    state.stop();
+                let is_err = result.is_err();
+                {
+                    let mut state = state.borrow_mut();
+                    if is_err {
+                        state.stop();
+                    }
+                    if let Some(record) = state.queue.iter_mut().find(|r| r.id == id) {
+                        record.outcome = Some(result);
+                        record.done = true;
+                    }
                 }
-                if let Some(record) = state.queue.iter_mut().find(|r| r.id == id) {
-                    record.outcome = Some(result);
-                    record.done = true;
+                if !*in_process.borrow() {
+                    flush(&state);
                 }
-            }
-            flush(&state);
-        });
+            })
+        };
 
         // Hand the message to the session. The session calls the handler once,
         // now or later. The handler drives ordered release.
@@ -183,6 +192,10 @@ impl<M: 'static> Functor<M> {
                 .borrow_mut()
                 .process_outgoing_message(message, handler);
         }
+        // The session borrow has dropped. A synchronous completion deferred its
+        // flush to here so a downstream callback can re-enter the session.
+        *in_process.borrow_mut() = false;
+        flush(&self.state);
     }
 }
 

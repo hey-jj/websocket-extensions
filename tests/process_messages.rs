@@ -177,6 +177,25 @@ fn close_with_no_pipeline_calls_back_immediately() {
     assert!(*notified.borrow());
 }
 
+// Added: a user callback may close from inside a synchronous completion
+// without a borrow re-entry panic.
+
+#[test]
+fn closing_from_a_sync_completion_does_not_panic() {
+    let (mut ext, ..) = setup();
+    ext.activate("deflate").unwrap();
+    let ext = Rc::new(ext);
+
+    let driver = ext.clone();
+    let closed = Rc::new(RefCell::new(false));
+    let flag = closed.clone();
+    ext.process_incoming_message(Message::empty(), move |_outcome| {
+        driver.close(move || *flag.borrow_mut() = true);
+    });
+
+    assert!(*closed.borrow());
+}
+
 // Added: a trailing id frame survives processing.
 
 #[test]
