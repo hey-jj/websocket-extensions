@@ -298,46 +298,65 @@ impl<M: 'static> Extensions<M> {
     /// [`ExtensionError::UnknownExtension`] when the server names an extension
     /// that was not offered, [`ExtensionError::RsvConflict`] when two responses
     /// claim the same RSV bit, and [`ExtensionError::UnacceptableParams`] when a
-    /// session rejects the server's parameters.
+    /// session rejects the server's parameters. On any error the container is
+    /// left unchanged, so a corrected response can be activated next.
     pub fn activate(&mut self, header: &str) -> Result<(), ExtensionError> {
         let responses = parser::parse_header(Some(header))?;
 
-        let mut records: Vec<SessionRecord<M>> = Vec::new();
+        // Validate every response into locals before touching self, so an error
+        // partway through leaves self unchanged and a retry starts clean.
+        let mut rsv = RsvReservations::default();
         let mut active: Vec<ActiveExt> = Vec::new();
+        let mut accepted: Vec<usize> = Vec::new();
 
         for offer in &responses {
             let name = offer.name.as_str();
             let params = &offer.params;
 
-            let record = self
+            let idx = self
                 .client_index
-                .iter_mut()
-                .find(|r| r.name == name)
+                .iter()
+                .position(|r| r.name == name)
                 .ok_or_else(|| ExtensionError::UnknownExtension(name.to_string()))?;
+            let uses = self.client_index[idx].uses;
 
-            if let Some((bit, first)) = self.rsv.conflict(record.uses) {
-                return Err(ExtensionError::RsvConflict(bit, first, record.name.clone()));
+            if let Some((bit, first)) = rsv.conflict(uses) {
+                return Err(ExtensionError::RsvConflict(
+                    bit,
+                    first,
+                    self.client_index[idx].name.clone(),
+                ));
             }
 
-            let mut session = record.session.take().expect("session offered once");
+            let session = self.client_index[idx]
+                .session
+                .as_mut()
+                .expect("session offered once");
             if !session.activate(params) {
-                // Put the session back so a retry sees it.
-                record.session = Some(session);
                 return Err(ExtensionError::UnacceptableParams(
                     parser::serialize_params(name, params),
                 ));
             }
 
-            let name = record.name.clone();
-            let uses = record.uses;
-            self.rsv.reserve(&name, uses);
+            rsv.reserve(&self.client_index[idx].name, uses);
             active.push(ActiveExt { uses });
-            records.push(SessionRecord {
-                name,
-                session: session as Box<dyn Session<M>>,
-            });
+            accepted.push(idx);
         }
 
+        // Every response validated. Take the accepted sessions and commit.
+        let records: Vec<SessionRecord<M>> = accepted
+            .into_iter()
+            .map(|idx| {
+                let record = &mut self.client_index[idx];
+                SessionRecord {
+                    name: record.name.clone(),
+                    session: record.session.take().expect("session offered once")
+                        as Box<dyn Session<M>>,
+                }
+            })
+            .collect();
+
+        self.rsv = rsv;
         self.sessions = active;
         self.pipeline = Some(Pipeline::new(records));
         Ok(())

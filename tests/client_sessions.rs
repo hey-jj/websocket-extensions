@@ -224,6 +224,30 @@ fn does_not_activate_sessions_not_named_in_the_header() {
 }
 
 #[test]
+fn a_rejected_response_can_be_retried_without_a_spurious_conflict() {
+    let (mut ext, _deflate, _conflict, nonconflict) = setup_activate();
+    // reverse uses RSV2, so it does not conflict with deflate's RSV1, but it
+    // rejects its parameters. The second response in the header then fails
+    // after deflate has already been accepted.
+    nonconflict.behavior().activate_returns = false;
+
+    let first = ext.activate("deflate, reverse").unwrap_err();
+    assert_eq!(
+        first,
+        ExtensionError::UnacceptableParams("reverse".to_string())
+    );
+
+    // The failed activate left no stale RSV reservation and no consumed
+    // session, so the retry reports the same rejection rather than a conflict
+    // that names deflate as both holders.
+    let second = ext.activate("deflate, reverse").unwrap_err();
+    assert_eq!(
+        second,
+        ExtensionError::UnacceptableParams("reverse".to_string())
+    );
+}
+
+#[test]
 fn throws_if_activate_does_not_return_true() {
     let (mut ext, deflate, ..) = setup_activate();
     deflate.behavior().activate_returns = false;
