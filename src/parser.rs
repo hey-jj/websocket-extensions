@@ -270,15 +270,19 @@ fn is_number(s: &str) -> bool {
 
 /// Convert a token or quoted-string value into a typed [`Value`].
 ///
-/// A value matching the numeric grammar becomes a number. Everything else stays
-/// a string. This runs for both unquoted and quoted values.
+/// A value matching the numeric grammar becomes a number, unless its magnitude
+/// overflows f64, in which case it stays a string so it round-trips instead of
+/// serializing as "Infinity". Everything else stays a string. This runs for
+/// both unquoted and quoted values.
 fn coerce(data: String) -> Value {
     if is_number(&data) {
-        // The grammar admits only inputs that f64 parses without error.
-        Value::Number(data.parse::<f64>().unwrap())
-    } else {
-        Value::Str(data)
+        if let Ok(n) = data.parse::<f64>() {
+            if n.is_finite() {
+                return Value::Number(n);
+            }
+        }
     }
+    Value::Str(data)
 }
 
 /// A linear scanner over a header string.

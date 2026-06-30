@@ -249,6 +249,17 @@ fn quoted_numeric_value_is_coerced() {
 }
 
 #[test]
+fn numeric_value_past_f64_range_stays_a_string_and_round_trips() {
+    // A digit run too large for f64 saturates to an infinity. Keeping it as a
+    // string avoids serializing the value back as "Infinity".
+    let big = "1".repeat(400);
+    let header = format!("a; b={}", big);
+    let offers = parse_header(Some(&header)).unwrap();
+    assert_eq!(offers[0].params.get("b"), Some(&Slot::One(s(&big))));
+    assert_eq!(serialize_params("a", &offers[0].params), header);
+}
+
+#[test]
 fn quoted_value_strips_all_backslashes() {
     // Every backslash is removed, regardless of what follows, including a
     // backslash that precedes another backslash.
