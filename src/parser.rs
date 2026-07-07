@@ -310,9 +310,9 @@ impl<'a> Scanner<'a> {
         self.pos >= self.src.len()
     }
 
-    /// Skip ASCII spaces.
+    /// Skip ASCII spaces and tabs.
     fn skip_spaces(&mut self) {
-        while self.peek() == Some(b' ') {
+        while matches!(self.peek(), Some(b' ' | b'\t')) {
             self.pos += 1;
         }
     }
@@ -337,11 +337,9 @@ impl<'a> Scanner<'a> {
 
     /// Read a quoted string. Assumes the opening quote is the next byte.
     ///
-    /// The content allows an escape `\` plus any ASCII byte, or any byte that is
-    /// not a control char, `"`, or `\`. Every backslash is dropped from the
-    /// value, whatever follows it. So `\"` yields `"`, `\a` yields `a`, and the
-    /// two-byte sequence `\\` yields nothing. Returns `None` on a malformed or
-    /// unterminated string.
+    /// The content allows a quoted-pair or any byte that is not a control char,
+    /// `"`, or `\`. A quoted-pair keeps the escaped byte. Returns `None` on a
+    /// malformed or unterminated string.
     fn read_quoted(&mut self) -> Option<String> {
         if self.peek() != Some(b'"') {
             return None;
@@ -358,14 +356,14 @@ impl<'a> Scanner<'a> {
                     return String::from_utf8(out).ok();
                 }
                 Some(b'\\') => {
-                    // An escape unit is the backslash plus the next byte, which
-                    // must be ASCII. Drop the backslash. Keep the escaped byte
-                    // unless it is itself a backslash, which is also dropped. So
-                    // `\"` yields `"`, `\a` yields `a`, and `\\` yields nothing.
                     self.pos += 1;
                     match self.peek() {
-                        Some(b'\\') => self.pos += 1,
-                        Some(c) if c <= 0x7f => {
+                        Some(c)
+                            if c == b'\t'
+                                || c == b' '
+                                || (0x21..=0x7e).contains(&c)
+                                || c >= 0x80 =>
+                        {
                             out.push(c);
                             self.pos += 1;
                         }
@@ -579,7 +577,7 @@ fn print_value(out: &mut Vec<String>, key: &str, value: &Value) {
         out.push(format!("{}={}", key, format_number(*n)));
     } else if let Value::Str(s) = value {
         if s.chars().any(|c| !is_token_char(c)) {
-            let escaped = s.replace('"', "\\\"");
+            let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
             out.push(format!("{}=\"{}\"", key, escaped));
         } else {
             out.push(format!("{}={}", key, s));

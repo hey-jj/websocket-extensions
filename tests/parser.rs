@@ -61,6 +61,11 @@ fn parses_two_offers_with_no_params() {
 }
 
 #[test]
+fn parses_tab_after_extension_comma() {
+    assert_parses(Some("a,\tb"), &[("a", Params::new()), ("b", Params::new())]);
+}
+
+#[test]
 fn parses_a_duplicate_offer_name() {
     assert_parses(Some("a, a"), &[("a", Params::new()), ("a", Params::new())]);
 }
@@ -260,19 +265,20 @@ fn numeric_value_past_f64_range_stays_a_string_and_round_trips() {
 }
 
 #[test]
-fn quoted_value_strips_all_backslashes() {
-    // Every backslash is removed, regardless of what follows, including a
-    // backslash that precedes another backslash.
+fn quoted_value_keeps_escaped_bytes() {
     let offers = parse_header(Some("a; b=\"a\\b\\c\"")).unwrap();
     assert_eq!(offers[0].params.get("b"), Some(&Slot::One(s("abc"))));
 
-    // Backslash before backslash: the pair collapses to nothing.
     let offers = parse_header(Some("a; b=\"\\\\b\"")).unwrap();
-    assert_eq!(offers[0].params.get("b"), Some(&Slot::One(s("b"))));
+    assert_eq!(offers[0].params.get("b"), Some(&Slot::One(s("\\b"))));
 
-    // Two such pairs around content: x\\y\\z yields xyz.
     let offers = parse_header(Some("a; b=\"x\\\\y\\\\z\"")).unwrap();
-    assert_eq!(offers[0].params.get("b"), Some(&Slot::One(s("xyz"))));
+    assert_eq!(offers[0].params.get("b"), Some(&Slot::One(s("x\\y\\z"))));
+}
+
+#[test]
+fn escaped_control_char_in_a_quoted_value_is_rejected() {
+    assert!(parse_header(Some("a; b=\"x\\\ny\"")).is_err());
 }
 
 #[test]
@@ -346,10 +352,17 @@ fn serializes_a_fractional_number() {
 
 #[test]
 fn serializes_a_value_with_an_inner_quote() {
-    // Only `"` is escaped inside the quoted form. A backslash is not escaped.
     assert_eq!(
         serialize_params("a", &params(&[("b", s("a\"b"))])),
         "a; b=\"a\\\"b\""
+    );
+}
+
+#[test]
+fn serializes_a_value_with_an_inner_backslash() {
+    assert_eq!(
+        serialize_params("a", &params(&[("b", s("a\\b"))])),
+        "a; b=\"a\\\\b\""
     );
 }
 
