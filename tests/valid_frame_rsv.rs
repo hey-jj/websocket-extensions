@@ -131,6 +131,17 @@ fn generate_offer_reflects_offered_extensions_in_the_active_set() {
 }
 
 #[test]
+fn empty_client_offer_does_not_reserve_rsv_bits() {
+    let mut ext = Extensions::<Message>::new();
+    let deflate = MockHandle::new("deflate", true, false, false);
+    deflate.behavior().offer = Some(Vec::new());
+    ext.add(deflate.extension()).unwrap();
+
+    assert_eq!(ext.generate_offer(), None);
+    assert!(!ext.valid_frame_rsv(&frame(1, true, false, false)));
+}
+
+#[test]
 fn a_second_generate_offer_overwrites_the_active_set() {
     // The first offer sets rsv1 via deflate. A second offer with only an rsv2
     // extension must replace the active set, not accumulate it.

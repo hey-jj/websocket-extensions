@@ -260,6 +260,9 @@ impl<M: 'static> Extensions<M> {
 
             let uses = RsvUse([ext.rsv1(), ext.rsv2(), ext.rsv3()]);
             let offers = session.generate_offer().unwrap_or_default();
+            if offers.is_empty() {
+                continue;
+            }
             for params in &offers {
                 offer.push(parser::serialize_params(ext.name(), params));
             }
@@ -327,6 +330,11 @@ impl<M: 'static> Extensions<M> {
                     self.client_index[idx].name.clone(),
                 ));
             }
+            if accepted.contains(&idx) {
+                return Err(ExtensionError::UnacceptableParams(
+                    parser::serialize_params(name, params),
+                ));
+            }
 
             let session = self.client_index[idx]
                 .session
@@ -381,6 +389,7 @@ impl<M: 'static> Extensions<M> {
         let mut response: Vec<String> = Vec::new();
         let mut records: Vec<SessionRecord<M>> = Vec::new();
         let mut active: Vec<ActiveExt> = Vec::new();
+        let mut rsv = RsvReservations::default();
 
         for ext in &self.in_order {
             let offer = offers.by_name(ext.name());
@@ -388,7 +397,7 @@ impl<M: 'static> Extensions<M> {
                 continue;
             }
             let uses = RsvUse([ext.rsv1(), ext.rsv2(), ext.rsv3()]);
-            if self.rsv.conflict(uses).is_some() {
+            if rsv.conflict(uses).is_some() {
                 continue;
             }
 
@@ -397,7 +406,7 @@ impl<M: 'static> Extensions<M> {
                 None => continue,
             };
 
-            self.rsv.reserve(ext.name(), uses);
+            rsv.reserve(ext.name(), uses);
 
             let params = session.generate_response();
             response.push(parser::serialize_params(ext.name(), &params));
@@ -408,6 +417,7 @@ impl<M: 'static> Extensions<M> {
             });
         }
 
+        self.rsv = rsv;
         self.sessions = active;
         self.pipeline = Some(Pipeline::new(records));
 

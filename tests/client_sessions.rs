@@ -178,6 +178,19 @@ fn does_not_throw_for_two_non_conflicting_extensions() {
 }
 
 #[test]
+fn duplicate_plain_response_is_rejected() {
+    let mut ext = Extensions::new();
+    let plain = MockHandle::new("plain", false, false, false);
+    plain.set_offer(Params::new());
+    plain.behavior().activate_returns = true;
+    ext.add(plain.extension()).unwrap();
+    ext.generate_offer();
+
+    let err = ext.activate("plain, plain").unwrap_err();
+    assert_eq!(err, ExtensionError::UnacceptableParams("plain".to_string()));
+}
+
+#[test]
 fn activates_one_session_with_no_params() {
     let (mut ext, deflate, ..) = setup_activate();
     ext.activate("deflate").unwrap();

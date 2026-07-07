@@ -101,6 +101,22 @@ fn returns_the_serialized_response_from_the_session() {
 }
 
 #[test]
+fn repeat_generate_response_recomputes_rsv_reservations() {
+    let mut ext = Extensions::<Message>::new();
+    let deflate = MockHandle::new("deflate", true, false, false);
+    ext.add(deflate.extension()).unwrap();
+
+    assert_eq!(
+        ext.generate_response("deflate").unwrap().as_deref(),
+        Some("deflate")
+    );
+    assert_eq!(
+        ext.generate_response("deflate").unwrap().as_deref(),
+        Some("deflate")
+    );
+}
+
+#[test]
 fn returns_serialized_responses_from_multiple_sessions() {
     let (mut ext, ..) = setup();
     assert_eq!(
