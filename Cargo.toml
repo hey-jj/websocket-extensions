@@ -1,6 +1,6 @@
 [package]
 name = "websocket-extensions"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "WebSocket Sec-WebSocket-Extensions header parsing and extension negotiation"
 license = "MIT"
